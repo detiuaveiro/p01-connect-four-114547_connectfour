@@ -106,7 +106,7 @@ def score_position(board, piece, opponent_piece):
 
     return score
 
-def minimax(board, depth, maximizing_player, my_piece, opponent_piece):
+def minimax(board, depth, maximizing_player, my_piece, opponent_piece, alpha=-math.inf, beta=math.inf):
     if depth == 0 or is_terminal(board, my_piece, opponent_piece):
         if check_win(board, my_piece):
             return None, math.inf
@@ -123,18 +123,24 @@ def minimax(board, depth, maximizing_player, my_piece, opponent_piece):
         for col in get_valid_columns(board):
             b = board.copy()
             drop_piece(b, col, my_piece)
-            _, score = minimax(b, depth-1, False, my_piece, opponent_piece)
+            _, score = minimax(b, depth-1, False, my_piece, opponent_piece, alpha, beta)
             if score > best_score:
                 best_score, best_col = score, col
+            alpha = max(alpha, best_score)
+            if beta <= alpha:
+                break
         return best_col, best_score
     else:
         best_score = np.inf
         for col in get_valid_columns(board):
             b = board.copy()
             drop_piece(b, col, opponent_piece)
-            _, score = minimax(b, depth-1, True, my_piece, opponent_piece)
+            _, score = minimax(b, depth-1, True, my_piece, opponent_piece, alpha, beta)
             if score < best_score:
                 best_score, best_col = score, col
+            beta = min(beta, best_score)
+            if beta <= alpha:
+                break
         return best_col, best_score
 
 class MinimaxAgent(BaseC4Agent):

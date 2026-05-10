@@ -13,6 +13,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 ROWS = 6
 COLS = 7
+COLUMN_WEIGHTS = [0, 1, 3, 5, 3, 1, 0]
 
 
 def get_valid_columns(board):
@@ -77,10 +78,9 @@ def evaluate_window(window, piece, opponent_piece):
 def score_position(board, piece, opponent_piece):
     score = 0
 
-    column_weights = [0, 1, 3, 5, 3, 1, 0] 
     for col in range(COLS):
         col_array = [int(i) for i in list(board[:, col])]
-        score += col_array.count(piece) * column_weights[col]
+        score += col_array.count(piece) * COLUMN_WEIGHTS[col]
 
     for r in range(ROWS):
         row_array = [int(i) for i in list(board[r,:])]
@@ -106,7 +106,24 @@ def score_position(board, piece, opponent_piece):
 
     return score
 
-def minimax(board, depth, maximizing_player, my_piece, opponent_piece):
+def order_moves(board, valid_columns, piece, opponent_piece):
+    def move_score(col):
+        b = board.copy()
+        drop_piece(b, col, piece)
+        score = 0
+        for r in range(ROWS):
+            for c in range(COLS - 3):
+                w = [int(b[r][c+i]) for i in range(4)]
+                if w.count(piece) == 3 and w.count(0) == 1:
+                    score += 1
+        return score
+
+    
+    center_order = sorted(valid_columns, key=lambda c: abs(c - COLS//2))
+    return sorted(center_order, key=move_score, reverse=True)
+
+
+def minimax(board, depth, maximizing_player, my_piece, opponent_piece, alpha=-math.inf, beta=math.inf):
     if depth == 0 or is_terminal(board, my_piece, opponent_piece):
         if check_win(board, my_piece):
             return None, math.inf
@@ -120,21 +137,27 @@ def minimax(board, depth, maximizing_player, my_piece, opponent_piece):
     best_col = None
     if maximizing_player:
         best_score = -np.inf
-        for col in get_valid_columns(board):
+        for col in order_moves(board, get_valid_columns(board), my_piece, opponent_piece):
             b = board.copy()
             drop_piece(b, col, my_piece)
-            _, score = minimax(b, depth-1, False, my_piece, opponent_piece)
+            _, score = minimax(b, depth-1, False, my_piece, opponent_piece, alpha, beta)
             if score > best_score:
                 best_score, best_col = score, col
+            alpha = max(alpha, best_score)
+            if beta <= alpha:
+                break
         return best_col, best_score
     else:
         best_score = np.inf
-        for col in get_valid_columns(board):
+        for col in order_moves(board, get_valid_columns(board), opponent_piece, my_piece):
             b = board.copy()
             drop_piece(b, col, opponent_piece)
-            _, score = minimax(b, depth-1, True, my_piece, opponent_piece)
+            _, score = minimax(b, depth-1, True, my_piece, opponent_piece, alpha, beta)
             if score < best_score:
                 best_score, best_col = score, col
+            beta = min(beta, best_score)
+            if beta <= alpha:
+                break
         return best_col, best_score
 
 class MinimaxAgent(BaseC4Agent):
