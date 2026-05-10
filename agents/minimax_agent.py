@@ -4,8 +4,9 @@ import logging
 import os
 import sys
 import numpy as np
+import math
 
-from agents.base_agent import BaseC4Agent
+from base_agent import BaseC4Agent
 from websockets.asyncio.client import connect
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -106,8 +107,35 @@ def score_position(board, piece, opponent_piece):
     return score
 
 def minimax(board, depth, maximizing_player, my_piece, opponent_piece):
-    #TODO
-    pass
+    if depth == 0 or is_terminal(board, my_piece, opponent_piece):
+        if check_win(board, my_piece):
+            return None, math.inf
+        elif check_win(board, opponent_piece):
+            return None, -math.inf
+        elif len(get_valid_columns(board)) == 0:
+            return None, 0
+        else:
+            return None, score_position(board, my_piece, opponent_piece)
+
+    best_col = None
+    if maximizing_player:
+        best_score = -np.inf
+        for col in get_valid_columns(board):
+            b = board.copy()
+            drop_piece(b, col, my_piece)
+            _, score = minimax(b, depth-1, False, my_piece, opponent_piece)
+            if score > best_score:
+                best_score, best_col = score, col
+        return best_col, best_score
+    else:
+        best_score = np.inf
+        for col in get_valid_columns(board):
+            b = board.copy()
+            drop_piece(b, col, opponent_piece)
+            _, score = minimax(b, depth-1, True, my_piece, opponent_piece)
+            if score < best_score:
+                best_score, best_col = score, col
+        return best_col, best_score
 
 class MinimaxAgent(BaseC4Agent):
     def __init__(self, server_uri=None):
@@ -150,5 +178,10 @@ class MinimaxAgent(BaseC4Agent):
             logging.error(f"Connection lost: {e}")
 
     async def deliberate(self, valid_actions):
-        # TODO: Implement the deliberate method
-        pass
+        col, score = await asyncio.to_thread(minimax, self.board, 4, True, self.my_piece, self.opponent_piece)
+        logging.info(f"Minimax selected column {col} with score {score}")
+        return col if col in valid_actions else None
+    
+if __name__ == "__main__":
+    agent = MinimaxAgent()
+    asyncio.run(agent.run())
