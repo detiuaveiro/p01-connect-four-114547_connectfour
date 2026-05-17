@@ -203,7 +203,10 @@ class MinimaxAgent(BaseC4Agent):
     async def deliberate(self, valid_actions):
         col, score = await asyncio.to_thread(minimax, self.board, 6, True, self.my_piece, self.opponent_piece)
         logging.info(f"Minimax selected column {col} with score {score}")
-        return col if col in valid_actions else None
+        if col not in valid_actions:
+            col = valid_actions[len(valid_actions) // 2]
+            logging.warning(f"Minimax returned invalid column, falling back to {col}")
+        return col
     
 if __name__ == "__main__":
     agent = MinimaxAgent()

@@ -5,6 +5,7 @@ import os
 import sys
 import numpy as np
 import math
+import random
 
 from base_agent import BaseC4Agent
 from websockets.asyncio.client import connect
@@ -13,7 +14,15 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 ROWS = 6
 COLS = 7
+COLUMN_WEIGHTS = [0, 1, 3, 5, 3, 1, 0]
+EXACT = 0
+LOWERBOUND = 1
+UPPERBOUND = 2
+MAX_TABLE_SIZE = 1000000
 
+random.seed(42)
+ZOBRIST_TABLE = [[[random.getrandbits(64) for _ in range(2)] for _ in range(COLS)] for _ in range(ROWS)]
+transposition_table = {}
 
 def get_valid_columns(board):
     return [col for col in range(len(board[0])) if board[0][col] == 0]
@@ -58,6 +67,18 @@ def is_terminal(board, my_piece, opponent_piece):
         len(get_valid_columns(board)) == 0
     )
 
+def is_symmetric(board):
+    return np.array_equal(board, np.fliplr(board))
+
+def compute_hash(board):
+    h = 0
+    for r in range(ROWS):
+        for c in range(COLS):
+            piece = board[r][c]
+            if piece != 0:
+                h ^= ZOBRIST_TABLE[r][c][piece-1]
+    return h
+
 def evaluate_window(window, piece, opponent_piece):
     score = 0
     if window.count(piece) == 4:
@@ -77,10 +98,9 @@ def evaluate_window(window, piece, opponent_piece):
 def score_position(board, piece, opponent_piece):
     score = 0
 
-    column_weights = [0, 1, 3, 5, 3, 1, 0] 
     for col in range(COLS):
         col_array = [int(i) for i in list(board[:, col])]
-        score += col_array.count(piece) * column_weights[col]
+        score += col_array.count(piece) * COLUMN_WEIGHTS[col]
 
     for r in range(ROWS):
         row_array = [int(i) for i in list(board[r,:])]
@@ -106,13 +126,48 @@ def score_position(board, piece, opponent_piece):
 
     return score
 
-def minimax(board, depth, maximizing_player, my_piece, opponent_piece):
+def order_moves(board, valid_columns, piece, opponent_piece):
+    def move_score(col):
+        b = board.copy()
+        drop_piece(b, col, piece)
+        score = 0
+        for r in range(ROWS):
+            for c in range(COLS - 3):
+                w = [int(b[r][c+i]) for i in range(4)]
+                if w.count(piece) == 3 and w.count(0) == 1:
+                    score += 1
+        return score
+
+    
+    center_order = sorted(valid_columns, key=lambda c: abs(c - COLS//2))
+    return sorted(center_order, key=move_score, reverse=True)
+
+
+def minimax(board, depth, maximizing_player, my_piece, opponent_piece, alpha=-math.inf, beta=math.inf):
+    original_alpha = alpha
+    original_beta = beta
+    h = compute_hash(board)
+    if h in transposition_table:
+        entry = transposition_table[h]
+        if entry['depth'] >= depth:
+            if entry['flag'] == EXACT:
+                return entry['best_col'], entry['best_score']
+            elif entry['flag'] == LOWERBOUND:
+                alpha = max(alpha, entry['best_score'])
+            elif entry['flag'] == UPPERBOUND:
+                beta = min(beta, entry['best_score'])
+            if alpha >= beta:
+                return entry['best_col'], entry['best_score']
+            
+    valid_cols = get_valid_columns(board)
+    if is_symmetric(board):
+        valid_cols = [col for col in valid_cols if col <= COLS // 2]
     if depth == 0 or is_terminal(board, my_piece, opponent_piece):
         if check_win(board, my_piece):
             return None, math.inf
         elif check_win(board, opponent_piece):
             return None, -math.inf
-        elif len(get_valid_columns(board)) == 0:
+        elif len(valid_cols) == 0:
             return None, 0
         else:
             return None, score_position(board, my_piece, opponent_piece)
@@ -120,22 +175,35 @@ def minimax(board, depth, maximizing_player, my_piece, opponent_piece):
     best_col = None
     if maximizing_player:
         best_score = -np.inf
-        for col in get_valid_columns(board):
+        for col in order_moves(board, valid_cols, my_piece, opponent_piece):
             b = board.copy()
             drop_piece(b, col, my_piece)
-            _, score = minimax(b, depth-1, False, my_piece, opponent_piece)
+            _, score = minimax(b, depth-1, False, my_piece, opponent_piece, alpha, beta)
             if score > best_score:
                 best_score, best_col = score, col
-        return best_col, best_score
+            alpha = max(alpha, best_score)
+            if beta <= alpha:
+                break
     else:
         best_score = np.inf
-        for col in get_valid_columns(board):
+        for col in order_moves(board, valid_cols, opponent_piece, my_piece):
             b = board.copy()
             drop_piece(b, col, opponent_piece)
-            _, score = minimax(b, depth-1, True, my_piece, opponent_piece)
+            _, score = minimax(b, depth-1, True, my_piece, opponent_piece, alpha, beta)
             if score < best_score:
                 best_score, best_col = score, col
-        return best_col, best_score
+            beta = min(beta, best_score)
+            if beta <= alpha:
+                break
+    if best_score <= original_alpha:
+        flag = UPPERBOUND
+    elif best_score >= original_beta:
+        flag = LOWERBOUND
+    else:
+        flag = EXACT
+    if len(transposition_table) < MAX_TABLE_SIZE:
+        transposition_table[h] = {'best_col': best_col, 'best_score': best_score, 'depth': depth, 'flag': flag}
+    return best_col, best_score
 
 class MinimaxAgent(BaseC4Agent):
     def __init__(self, server_uri=None):
@@ -178,7 +246,7 @@ class MinimaxAgent(BaseC4Agent):
             logging.error(f"Connection lost: {e}")
 
     async def deliberate(self, valid_actions):
-        col, score = await asyncio.to_thread(minimax, self.board, 4, True, self.my_piece, self.opponent_piece)
+        col, score = await asyncio.to_thread(minimax, self.board, 6, True, self.my_piece, self.opponent_piece)
         logging.info(f"Minimax selected column {col} with score {score}")
         if col not in valid_actions:
             col = valid_actions[len(valid_actions) // 2]
